@@ -51,7 +51,8 @@ func InitDatabase(ctx context.Context) error {
 	opts := options.Client().ApplyURI(config.Conf.MongoUri).
 		SetMinPoolSize(10).
 		SetMaxConnIdleTime(10 * time.Minute).
-		SetConnectTimeout(20 * time.Second)
+		SetConnectTimeout(30 * time.Second).
+		SetServerSelectionTimeout(45 * time.Second)
 
 	client, err := mongo.Connect(opts)
 	if err != nil {

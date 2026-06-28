@@ -47,13 +47,13 @@ func getSessionStrings(prefix string, max int) []string {
 	var sessions []string
 	for i := 1; i <= max; i++ {
 		key := fmt.Sprintf("%s%d", prefix, i)
-		if session := os.Getenv(key); session != "" {
+		if session := strings.TrimSpace(os.Getenv(key)); session != "" {
 			sessions = append(sessions, session)
 		}
 	}
 
 	// Also check for non-numbered version
-	if session := os.Getenv(prefix); session != "" {
+	if session := strings.TrimSpace(os.Getenv(prefix)); session != "" {
 		sessions = append(sessions, session)
 	}
 

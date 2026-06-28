@@ -307,7 +307,7 @@ func handleSingleTrack(c *td.Client, m *td.Message, updater *td.Message, song ut
 		dlResult, err := dl.DownloadSong(ctx, &saveCache, c)
 		if err != nil {
 			cache.ChatCache.RemoveCurrentSong(chatId)
-			_, err = updater.EditText(c, fmt.Sprintf("❌ Download failed: %s", err.Error()), nil)
+			_, err = updater.EditText(c, fmt.Sprintf("❌ Download failed: %s", dl.UserFacingError(err)), nil)
 			return err
 		}
 
