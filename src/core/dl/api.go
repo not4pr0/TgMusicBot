@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -73,6 +74,10 @@ func (a *ApiData) GetInfo(ctx context.Context) (utils.PlatformTracks, error) {
 	fullURL := fmt.Sprintf("%s/api/get_url?%s", a.ApiUrl, url.Values{"url": {a.Query}}.Encode())
 	resp, err := sendRequest(ctx, http.MethodGet, fullURL, nil, map[string]string{"X-API-Key": a.APIKey})
 	if err != nil {
+		if a.isSoundCloud() {
+			slog.Warn("SoundCloud API GetInfo failed, falling back to yt-dlp", "error", err)
+			return getGenericInfoWithYtDlp(ctx, a.Query, utils.SoundCloud, false)
+		}
 		return utils.PlatformTracks{}, fmt.Errorf("the GetInfo request failed: %w", err)
 	}
 
@@ -81,6 +86,10 @@ func (a *ApiData) GetInfo(ctx context.Context) (utils.PlatformTracks, error) {
 	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
+		if a.isSoundCloud() {
+			slog.Warn("SoundCloud API GetInfo returned non-OK status, falling back to yt-dlp", "status", resp.Status)
+			return getGenericInfoWithYtDlp(ctx, a.Query, utils.SoundCloud, false)
+		}
 		return utils.PlatformTracks{}, fmt.Errorf("unexpected status code while fetching info: %s", resp.Status)
 	}
 
@@ -132,6 +141,10 @@ func (a *ApiData) GetTrack(ctx context.Context) (utils.TrackInfo, error) {
 	fullURL := fmt.Sprintf("%s/api/track?%s", a.ApiUrl, url.Values{"url": {a.Query}}.Encode())
 	resp, err := sendRequest(ctx, http.MethodGet, fullURL, nil, map[string]string{"X-API-Key": a.APIKey})
 	if err != nil {
+		if a.isSoundCloud() {
+			slog.Warn("SoundCloud API GetTrack failed, falling back to yt-dlp download", "error", err)
+			return a.soundCloudYtDlpTrackInfo(), nil
+		}
 		return utils.TrackInfo{}, fmt.Errorf("the GetTrack request failed: %w", err)
 	}
 	defer func(Body io.ReadCloser) {
@@ -139,6 +152,10 @@ func (a *ApiData) GetTrack(ctx context.Context) (utils.TrackInfo, error) {
 	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
+		if a.isSoundCloud() {
+			slog.Warn("SoundCloud API GetTrack returned non-OK status, falling back to yt-dlp download", "status", resp.Status)
+			return a.soundCloudYtDlpTrackInfo(), nil
+		}
 		return utils.TrackInfo{}, fmt.Errorf("unexpected status code while fetching the track: %s", resp.Status)
 	}
 
@@ -154,6 +171,9 @@ func (a *ApiData) downloadTrack(ctx context.Context, info utils.TrackInfo, video
 	yt := NewYouTubeData(a.Query)
 	if info.Platform == utils.YouTube && video {
 		return yt.downloadTrack(ctx, info, video)
+	}
+	if info.Platform == utils.SoundCloud && info.CdnURL == "" {
+		return downloadGenericWithYtDlp(ctx, info.URL)
 	}
 
 	downloader, err := NewDownload(ctx, info)
@@ -174,4 +194,16 @@ func (a *ApiData) downloadTrack(ctx context.Context, info utils.TrackInfo, video
 	}
 
 	return filePath, nil
+}
+
+func (a *ApiData) isSoundCloud() bool {
+	return apiPatterns[utils.SoundCloud].MatchString(a.Query)
+}
+
+func (a *ApiData) soundCloudYtDlpTrackInfo() utils.TrackInfo {
+	return utils.TrackInfo{
+		Id:       a.Query,
+		URL:      a.Query,
+		Platform: utils.SoundCloud,
+	}
 }

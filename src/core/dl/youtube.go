@@ -111,11 +111,16 @@ func (y *YouTubeData) GetInfo(ctx context.Context) (utils.PlatformTracks, error)
 			return tracks, nil
 		}
 		if err != nil {
-			slog.Warn("YouTube video InnerTube failed, falling back to yt-dlp", "video", videoID, "error", err)
+			slog.Warn("YouTube video InnerTube failed, using minimal metadata to avoid duplicate yt-dlp probe", "video", videoID, "error", err)
 		} else {
-			slog.Warn("YouTube video InnerTube returned no tracks, falling back to yt-dlp", "video", videoID)
+			slog.Warn("YouTube video InnerTube returned no tracks, using minimal metadata to avoid duplicate yt-dlp probe", "video", videoID)
 		}
-		return y.getInfoWithYtDlp(ctx, y.Query, false)
+		return utils.PlatformTracks{Results: []utils.MusicTrack{{
+			Id:       videoID,
+			Title:    "YouTube video " + videoID,
+			Url:      ytWatchURL + videoID,
+			Platform: utils.YouTube,
+		}}}, nil
 	}
 
 	return utils.PlatformTracks{}, errors.New("no video or playlist results were found")
@@ -240,6 +245,9 @@ func (y *YouTubeData) downloadWithYtDlp(ctx context.Context, videoID string, vid
 		if err == nil {
 			return filePath, nil
 		}
+		if isProxyConnectionError(err.Error()) {
+			return "", fmt.Errorf("yt-dlp proxy failed with %s: %w", filepath.Base(cookieFile), err)
+		}
 		attempts = append(attempts, fmt.Sprintf("%s: %s", filepath.Base(cookieFile), err.Error()))
 		slog.Warn("yt-dlp failed with cookie file, trying next one", "cookie", filepath.Base(cookieFile), "error", err)
 	}
@@ -248,6 +256,9 @@ func (y *YouTubeData) downloadWithYtDlp(ctx context.Context, videoID string, vid
 		slog.Warn("yt-dlp succeeded without cookies after all configured cookie files failed")
 		return filePath, nil
 	} else {
+		if isProxyConnectionError(err.Error()) {
+			return "", fmt.Errorf("yt-dlp proxy failed without cookies: %w", err)
+		}
 		attempts = append(attempts, "without cookies: "+err.Error())
 	}
 

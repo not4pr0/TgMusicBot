@@ -65,6 +65,9 @@ func (y *YouTubeData) getInfoWithYtDlp(ctx context.Context, rawURL string, playl
 		if err == nil {
 			err = errors.New("no tracks returned")
 		}
+		if isProxyConnectionError(err.Error()) {
+			return utils.PlatformTracks{}, fmt.Errorf("yt-dlp info proxy failed with %s: %w", filepath.Base(cookieFile), err)
+		}
 		attempts = append(attempts, fmt.Sprintf("%s: %s", filepath.Base(cookieFile), err.Error()))
 		slog.Warn("yt-dlp info failed with cookie file, trying next one", "cookie", filepath.Base(cookieFile), "error", err)
 	}
@@ -74,6 +77,9 @@ func (y *YouTubeData) getInfoWithYtDlp(ctx context.Context, rawURL string, playl
 		return tracks, nil
 	}
 	if err != nil {
+		if isProxyConnectionError(err.Error()) {
+			return utils.PlatformTracks{}, fmt.Errorf("yt-dlp info proxy failed without cookies: %w", err)
+		}
 		attempts = append(attempts, "without cookies: "+err.Error())
 	}
 
@@ -118,7 +124,7 @@ func (y *YouTubeData) runInfoYtDlp(ctx context.Context, rawURL string, playlist 
 	if len(info.Entries) > 0 {
 		tracks := make([]utils.MusicTrack, 0, len(info.Entries))
 		for _, entry := range info.Entries {
-			if track := entry.toMusicTrack(); track.Id != "" {
+			if track := entry.toMusicTrackForPlatform(utils.YouTube); track.Id != "" {
 				tracks = append(tracks, track)
 			}
 		}
@@ -135,7 +141,7 @@ func (y *YouTubeData) runInfoYtDlp(ctx context.Context, rawURL string, playlist 
 		Channel:    info.Channel,
 		Uploader:   info.Uploader,
 		ViewCount:  info.ViewCount,
-	}.toMusicTrack()
+	}.toMusicTrackForPlatform(utils.YouTube)
 	if track.Id == "" {
 		return utils.PlatformTracks{}, errors.New("yt-dlp returned no video id")
 	}
@@ -143,6 +149,10 @@ func (y *YouTubeData) runInfoYtDlp(ctx context.Context, rawURL string, playlist 
 }
 
 func (e ytdlpEntry) toMusicTrack() utils.MusicTrack {
+	return e.toMusicTrackForPlatform(utils.YouTube)
+}
+
+func (e ytdlpEntry) toMusicTrackForPlatform(platform string) utils.MusicTrack {
 	id := strings.TrimSpace(e.ID)
 	if id == "" {
 		id = extractVideoID(e.URL)
@@ -156,7 +166,13 @@ func (e ytdlpEntry) toMusicTrack() utils.MusicTrack {
 
 	url := strings.TrimSpace(e.WebpageURL)
 	if url == "" || !strings.HasPrefix(url, "http") {
-		url = ytWatchURL + id
+		if platform == utils.YouTube {
+			url = ytWatchURL + id
+		} else if strings.HasPrefix(e.URL, "http") {
+			url = e.URL
+		} else {
+			url = id
+		}
 	}
 
 	channel := e.Channel
@@ -177,6 +193,6 @@ func (e ytdlpEntry) toMusicTrack() utils.MusicTrack {
 		Duration:  int(e.Duration),
 		Channel:   channel,
 		Views:     views,
-		Platform:  utils.YouTube,
+		Platform:  platform,
 	}
 }
