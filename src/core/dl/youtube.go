@@ -14,11 +14,9 @@ import (
 	"ashokshau/tgmusic/config"
 	"ashokshau/tgmusic/src/utils"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,10 +77,22 @@ func (y *youTubeData) getInfo() (utils.PlatformTracks, error) {
 
 	switch {
 	case playlistID != "":
+		var tracks utils.PlatformTracks
+		var err error
 		if strings.HasPrefix(playlistID, "RD") {
-			return GetYouTubeMixPlaylist(ctx, playlistID)
+			tracks, err = GetYouTubeMixPlaylist(ctx, playlistID)
+		} else {
+			tracks, err = getYouTubePlaylist(ctx, playlistID)
 		}
-		return getYouTubePlaylist(ctx, playlistID)
+		if err == nil && len(tracks.Results) > 0 {
+			return tracks, nil
+		}
+		if err != nil {
+			slog.Warn("YouTube playlist InnerTube failed, falling back to yt-dlp", "playlist", playlistID, "error", err)
+		} else {
+			slog.Warn("YouTube playlist InnerTube returned no tracks, falling back to yt-dlp", "playlist", playlistID)
+		}
+		return y.getInfoWithYtDlp(y.Query, true)
 
 	case videoID != "":
 		for _, query := range []string{videoID, y.Query} {
@@ -110,7 +120,21 @@ func (y *youTubeData) getInfo() (utils.PlatformTracks, error) {
 		}
 
 		slog.Warn("Video ID was extracted but no matching track was found in search results", "video_id", videoID)
-		return getYouTubeVideo(ctx, videoID)
+		tracks, err := getYouTubeVideo(ctx, videoID)
+		if err == nil && len(tracks.Results) > 0 {
+			return tracks, nil
+		}
+		if err != nil {
+			slog.Warn("YouTube video InnerTube failed, using minimal metadata to avoid a yt-dlp probe", "video", videoID, "error", err)
+		} else {
+			slog.Warn("YouTube video InnerTube returned no tracks, using minimal metadata to avoid a yt-dlp probe", "video", videoID)
+		}
+		return utils.PlatformTracks{Results: []utils.MusicTrack{{
+			Id:       videoID,
+			Title:    "YouTube video " + videoID,
+			Url:      ytWatchURL + videoID,
+			Platform: utils.YouTube,
+		}}}, nil
 	}
 
 	return utils.PlatformTracks{}, errors.New("no video or playlist results were found")
@@ -178,9 +202,8 @@ func (y *youTubeData) downloadTrack(info utils.TrackInfo, video bool) (string, e
 }
 
 // buildYtdlpParams constructs the command-line parameters for yt-dlp to download media.
-func (y *youTubeData) buildYtdlpParams(videoID string, video bool) ([]string, string) {
+func (y *youTubeData) buildYtdlpParams(videoID string, video bool, cookieFile string) []string {
 	outputTemplate := filepath.Join(config.DownloadsDir, "%(id)s.%(ext)s")
-	var cookieFile string
 
 	params := []string{
 		"yt-dlp",
@@ -210,26 +233,62 @@ func (y *youTubeData) buildYtdlpParams(videoID string, video bool) ([]string, st
 		params = append(params, "-f", "bestaudio[ext=m4a]/bestaudio")
 	}
 
-	cookieFile = y.getCookieFile()
 	if cookieFile != "" {
 		params = append(params, "--cookies", cookieFile)
-	} else if config.Proxy != "" {
+	}
+	// The proxy (home connection via Tailscale) hides the VPS IP from YouTube,
+	// so it is used together with cookies, not as a substitute.
+	if config.Proxy != "" {
 		params = append(params, "--proxy", config.Proxy)
 	}
 
 	videoURL := "https://www.youtube.com/watch?v=" + videoID
 	params = append(params, videoURL, "--print", "after_move:filepath")
 
-	return params, cookieFile
+	return params
 }
 
 // downloadWithYtDlp downloads media from YouTube using the yt-dlp command-line tool.
+// Every configured cookie file is tried in order before a last cookieless
+// attempt, so one expired export does not take the bot down.
 func (y *youTubeData) downloadWithYtDlp(videoID string, video bool) (string, error) {
 	if videoID == "" {
 		return "", errors.New("videoID is empty")
 	}
 
-	ytdlpParams, cookieFile := y.buildYtdlpParams(videoID, video)
+	cookieFiles := config.GetCookiesPath()
+	if len(cookieFiles) == 0 {
+		return y.runYtDlp(videoID, video, "")
+	}
+
+	var attempts []string
+	for _, cookieFile := range cookieFiles {
+		filePath, err := y.runYtDlp(videoID, video, cookieFile)
+		if err == nil {
+			return filePath, nil
+		}
+		if isProxyConnectionError(err.Error()) {
+			return "", fmt.Errorf("yt-dlp proxy failed with %s: %w", filepath.Base(cookieFile), err)
+		}
+		attempts = append(attempts, fmt.Sprintf("%s: %s", filepath.Base(cookieFile), err.Error()))
+		slog.Warn("yt-dlp failed with cookie file, trying next one", "cookie", filepath.Base(cookieFile), "error", err)
+	}
+
+	if filePath, err := y.runYtDlp(videoID, video, ""); err == nil {
+		slog.Warn("yt-dlp succeeded without cookies after all configured cookie files failed")
+		return filePath, nil
+	} else {
+		if isProxyConnectionError(err.Error()) {
+			return "", fmt.Errorf("yt-dlp proxy failed without cookies: %w", err)
+		}
+		attempts = append(attempts, "without cookies: "+err.Error())
+	}
+
+	return "", fmt.Errorf("yt-dlp failed with all configured cookie files: %s", strings.Join(attempts, " | "))
+}
+
+func (y *youTubeData) runYtDlp(videoID string, video bool, cookieFile string) (string, error) {
+	ytdlpParams := y.buildYtdlpParams(videoID, video, cookieFile)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -241,7 +300,9 @@ func (y *youTubeData) downloadWithYtDlp(videoID string, video bool) (string, err
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			stderr := string(exitErr.Stderr)
-			if cookieFile != "" && strings.Contains(stderr, "Sign in to confirm you're not a bot") {
+			// Only delete cookie files the bot itself downloaded from COOKIES_URL;
+			// files mounted via COOKIES_PATH/COOKIES_DIR belong to the operator.
+			if cookieFile != "" && config.IsManagedCookiePath(cookieFile) && strings.Contains(stderr, "Sign in to confirm you're not a bot") {
 				_ = os.Remove(cookieFile)
 			}
 			return "", fmt.Errorf("yt-dlp failed with exit code %d: %s", exitErr.ExitCode(), stderr)
@@ -264,21 +325,6 @@ func (y *youTubeData) downloadWithYtDlp(videoID string, video bool) (string, err
 	}
 
 	return downloadedPathStr, nil
-}
-
-// getCookieFile retrieves the path to a cookie file from the configured list.
-func (y *youTubeData) getCookieFile() string {
-	cookiesPath := config.CookiesPath
-	if len(cookiesPath) == 0 {
-		return ""
-	}
-	n, err := rand.Int(rand.Reader, big.NewInt(int64(len(cookiesPath))))
-	if err != nil {
-		slog.Info("Could not generate a random number", "error", err)
-		return cookiesPath[0]
-	}
-
-	return cookiesPath[n.Int64()]
 }
 
 // downloadWithApi downloads a track using the external API.

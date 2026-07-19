@@ -84,6 +84,10 @@ func (a *apiData) getInfo() (utils.PlatformTracks, error) {
 	fullURL := fmt.Sprintf("%s/api/get_url?%s", a.ApiUrl, url.Values{"url": {a.Query}}.Encode())
 	resp, err := sendRequest(http.MethodGet, fullURL, nil, map[string]string{"X-API-Key": a.APIKey})
 	if err != nil {
+		if a.isSoundCloud() {
+			slog.Warn("SoundCloud API getInfo failed, falling back to yt-dlp", "error", err)
+			return getGenericInfoWithYtDlp(a.Query, utils.SoundCloud, false)
+		}
 		return utils.PlatformTracks{}, fmt.Errorf("the GetInfo request failed: %w", err)
 	}
 
@@ -92,6 +96,10 @@ func (a *apiData) getInfo() (utils.PlatformTracks, error) {
 	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
+		if a.isSoundCloud() {
+			slog.Warn("SoundCloud API getInfo returned non-OK status, falling back to yt-dlp", "status", resp.Status)
+			return getGenericInfoWithYtDlp(a.Query, utils.SoundCloud, false)
+		}
 		return utils.PlatformTracks{}, fmt.Errorf("unexpected status code while fetching info: %s", resp.Status)
 	}
 
@@ -139,6 +147,10 @@ func (a *apiData) getTrack() (utils.TrackInfo, error) {
 	fullURL := fmt.Sprintf("%s/api/track?%s", a.ApiUrl, url.Values{"url": {a.Query}}.Encode())
 	resp, err := sendRequest(http.MethodGet, fullURL, nil, map[string]string{"X-API-Key": a.APIKey})
 	if err != nil {
+		if a.isSoundCloud() {
+			slog.Warn("SoundCloud API getTrack failed, falling back to yt-dlp download", "error", err)
+			return a.soundCloudYtDlpTrackInfo(), nil
+		}
 		slog.Warn("GetTrack request failed", "error", err)
 		return utils.TrackInfo{}, fmt.Errorf("the GetTrack request failed: %w", err)
 	}
@@ -148,6 +160,10 @@ func (a *apiData) getTrack() (utils.TrackInfo, error) {
 	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
+		if a.isSoundCloud() {
+			slog.Warn("SoundCloud API getTrack returned non-OK status, falling back to yt-dlp download", "status", resp.Status)
+			return a.soundCloudYtDlpTrackInfo(), nil
+		}
 		return utils.TrackInfo{}, fmt.Errorf("unexpected status code while fetching the track: %s", resp.Status)
 	}
 
@@ -166,6 +182,9 @@ func (a *apiData) downloadTrack(info utils.TrackInfo, video bool) (string, error
 	yt := newYouTubeData(a.Query)
 	if info.Platform == utils.YouTube && video {
 		return yt.downloadTrack(info, video)
+	}
+	if info.Platform == utils.SoundCloud && info.CdnURL == "" {
+		return downloadGenericWithYtDlp(info.URL)
 	}
 
 	downloader, err := newDownload(info)
@@ -186,4 +205,18 @@ func (a *apiData) downloadTrack(info utils.TrackInfo, video bool) (string, error
 	}
 
 	return filePath, nil
+}
+
+func (a *apiData) isSoundCloud() bool {
+	return apiPatterns[utils.SoundCloud].MatchString(a.Query)
+}
+
+// soundCloudYtDlpTrackInfo builds a minimal TrackInfo whose empty CdnURL routes
+// the later download through downloadGenericWithYtDlp.
+func (a *apiData) soundCloudYtDlpTrackInfo() utils.TrackInfo {
+	return utils.TrackInfo{
+		Id:       a.Query,
+		URL:      a.Query,
+		Platform: utils.SoundCloud,
+	}
 }

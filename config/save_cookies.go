@@ -16,9 +16,49 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
-const cookiesDr = "src/cookies"
+const (
+	cookiesDr             = "src/cookies"
+	cookieFetchTimeout    = 30 * time.Second
+	cookieRefreshInterval = time.Hour
+)
+
+var (
+	cookieHTTPClient = &http.Client{Timeout: cookieFetchTimeout}
+
+	cookiesMu   sync.RWMutex
+	cookiesPath []string
+)
+
+// GetCookiesPath returns a snapshot of the current cookie file paths.
+func GetCookiesPath() []string {
+	cookiesMu.RLock()
+	defer cookiesMu.RUnlock()
+	if len(cookiesPath) == 0 {
+		return nil
+	}
+	out := make([]string, len(cookiesPath))
+	copy(out, cookiesPath)
+	return out
+}
+
+// setCookiesPath atomically replaces the cookie file paths.
+func setCookiesPath(paths []string) {
+	cookiesMu.Lock()
+	cookiesPath = paths
+	cookiesMu.Unlock()
+}
+
+// IsManagedCookiePath reports whether the path points into the directory where
+// cookies fetched from COOKIES_URL are stored. Only those files may be deleted
+// when YouTube rejects them; files discovered via COOKIES_PATH/COOKIES_DIR
+// belong to the operator.
+func IsManagedCookiePath(path string) bool {
+	return strings.HasPrefix(filepath.Clean(path), cookiesDr+string(os.PathSeparator))
+}
 
 // fetchContent downloads content from Pastebin or Batbin.
 func fetchContent(url string) (string, error) {
@@ -34,7 +74,7 @@ func fetchContent(url string) (string, error) {
 		rawURL = url
 	}
 
-	resp, err := http.Get(rawURL)
+	resp, err := cookieHTTPClient.Get(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to GET %s: %w", rawURL, err)
 	}
@@ -54,7 +94,7 @@ func fetchContent(url string) (string, error) {
 	return string(body), nil
 }
 
-// saveContent saves content to a file in /tmp and returns the file path.
+// saveContent saves content to a file in the cookies directory and returns the file path.
 func saveContent(url, content string) (string, error) {
 	parts := strings.Split(strings.Trim(url, "/"), "/")
 	filename := parts[len(parts)-1]
@@ -80,8 +120,9 @@ func saveContent(url, content string) (string, error) {
 	return filePath, nil
 }
 
-// saveAllCookies downloads all URLs and stores paths in CookiesPath.
-func saveAllCookies(urls []string) {
+// downloadAllCookies downloads all URLs and returns the saved file paths.
+func downloadAllCookies(urls []string) []string {
+	paths := make([]string, 0, len(urls))
 	for _, url := range urls {
 		content, err := fetchContent(url)
 		if err != nil {
@@ -95,6 +136,32 @@ func saveAllCookies(urls []string) {
 			continue
 		}
 
-		CookiesPath = append(CookiesPath, path)
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+// refreshCookies rebuilds the full cookie path list (local files first, then
+// downloaded ones) and swaps it atomically, so stale entries never accumulate.
+func refreshCookies(urls []string) {
+	paths := discoverCookieFiles(os.Getenv("COOKIES_PATH"), os.Getenv("COOKIES_DIR"))
+	paths = append(paths, downloadAllCookies(urls)...)
+
+	setCookiesPath(paths)
+	slog.Info("Refreshed cookie files", "count", len(paths), "urls", len(urls))
+}
+
+// startCookieRefresher runs an initial fetch and then refreshes on a fixed
+// interval, so expired cookie exports are replaced without restarting the bot.
+func startCookieRefresher(urls []string) {
+	if len(urls) == 0 && os.Getenv("COOKIES_PATH") == "" && os.Getenv("COOKIES_DIR") == "" {
+		return
+	}
+	refreshCookies(urls)
+
+	ticker := time.NewTicker(cookieRefreshInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		refreshCookies(urls)
 	}
 }

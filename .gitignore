@@ -12,3 +12,6 @@ libntgcalls.a
 libntgcalls.so
 libtdjson.so.*
 libtdjson.so
+
+.claude/
+.env.bak.*

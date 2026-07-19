@@ -252,7 +252,21 @@ func getYouTubePlaylist(ctx context.Context, playlistID string) (utils.PlatformT
 		return utils.PlatformTracks{}, err
 	}
 
-	videos := extractPlaylistVideos(resp)
+	videos, token := extractPlaylistVideosWithContinuation(resp)
+
+	// InnerTube only returns ~100 items per page; follow continuations so
+	// large playlists are queued in full.
+	const maxPages = 20
+	for page := 0; page < maxPages && token != ""; page++ {
+		resp, err = ytPost(ctx, "/youtubei/v1/browse", map[string]any{"continuation": token})
+		if err != nil {
+			break
+		}
+		more, next := extractContinuationPlaylistVideos(resp)
+		videos = append(videos, more...)
+		token = next
+	}
+
 	return buildTrackList(videos, mapYTVideo), nil
 }
 
@@ -318,7 +332,7 @@ func mapPlayerToTrack(src map[string]any) utils.MusicTrack {
 	}
 }
 
-func extractPlaylistVideos(src map[string]any) []map[string]any {
+func extractPlaylistVideosWithContinuation(src map[string]any) ([]map[string]any, string) {
 	contents := digArray(src,
 		"contents",
 		"twoColumnBrowseResultsRenderer",
@@ -332,13 +346,33 @@ func extractPlaylistVideos(src map[string]any) []map[string]any {
 		"playlistVideoListRenderer",
 		"contents",
 	)
+	return parsePlaylistContents(contents)
+}
+
+func extractContinuationPlaylistVideos(src map[string]any) ([]map[string]any, string) {
+	actions, ok := src["onResponseReceivedActions"].([]any)
+	if !ok || len(actions) == 0 {
+		return nil, ""
+	}
+	action, ok := actions[0].(map[string]any)
+	if !ok {
+		return nil, ""
+	}
+	items := digArray(action, "appendContinuationItemsAction", "continuationItems")
+	return parsePlaylistContents(items)
+}
+
+func parsePlaylistContents(contents []map[string]any) ([]map[string]any, string) {
 	var out []map[string]any
+	var token string
 	for _, c := range contents {
 		if v, ok := c["playlistVideoRenderer"].(map[string]any); ok {
 			out = append(out, v)
+		} else if cr, ok := c["continuationItemRenderer"].(map[string]any); ok {
+			token = digStr(cr, "continuationEndpoint", "continuationCommand", "token")
 		}
 	}
-	return out
+	return out, token
 }
 
 func extractMixPlaylistVideos(src map[string]any) []map[string]any {

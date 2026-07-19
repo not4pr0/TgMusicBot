@@ -43,9 +43,8 @@ var (
 	AutoLeave           = getEnvBool("AUTO_LEAVE", false)
 	EnableVideoPlayback = getEnvBool("ENABLE_VPLAY", true)
 
-	DEVS        []int64
-	CookiesPath []string
-	cookiesUrl  = processCookieURLs(os.Getenv("COOKIES_URL"))
+	DEVS       []int64
+	cookiesUrl = processCookieURLs(os.Getenv("COOKIES_URL"))
 )
 
 func init() {
@@ -86,8 +85,8 @@ func init() {
 			slog.Error("Failed to create temp dir for cookies", "error", err)
 			os.Exit(1)
 		}
-		go saveAllCookies(cookiesUrl)
 	}
+	go startCookieRefresher(cookiesUrl)
 }
 
 // getEnv returns the value of an environment variable or a default value if it is not set
