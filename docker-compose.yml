@@ -1,4 +1,32 @@
 services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - tgmusic_mongo_data:/data/db
+    # Pas d’exposition du port : uniquement le réseau Docker du compose.
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 40s
+
   tgmusic:
-    build: .
+    build:
+      context: .
+      args:
+        APP_UID: ${APP_UID:-1002}
+        APP_GID: ${APP_GID:-1002}
     env_file: .env
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    # Cookies YouTube : dossier complet pour rotation/fallback de plusieurs exports.
+    # Pas de :ro — yt-dlp peut réécrire le fichier choisi à la fermeture.
+    volumes:
+      - ../yt-dlp:/home/app/cookies
+
+volumes:
+  tgmusic_mongo_data:
