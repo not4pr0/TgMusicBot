@@ -42,6 +42,9 @@ func playCallbackHandler(c *td.Client, cb *td.UpdateNewCallbackQuery) error {
 		return nil
 	}
 
+	if handled, err := handleAdvancedPlayControl(c, cb, data); handled {
+		return err
+	}
 	currentTrack := cache.ChatCache.GetPlayingTrack(chatID)
 	if currentTrack == nil {
 		_ = cb.Answer(c, 0, false, "There is no active playback.", "")

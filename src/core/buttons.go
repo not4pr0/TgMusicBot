@@ -139,63 +139,55 @@ func BackHelpMenuKeyboard() *gotdbot.ReplyMarkupInlineKeyboard {
 }
 
 func ControlButtons(mode string) *gotdbot.ReplyMarkupInlineKeyboard {
-	skipBtn := cb("‣‣I", "play_skip", gotdbot.ButtonStyleDefault{})
-	stopBtn := cb("▢", "play_stop", gotdbot.ButtonStyleDefault{})
-	pauseBtn := cb("II", "play_pause", gotdbot.ButtonStyleDefault{})
-	resumeBtn := cb("▷", "play_resume", gotdbot.ButtonStyleDefault{})
-	muteBtn := cb("🔇", "play_mute", gotdbot.ButtonStyleDefault{})
-	unmuteBtn := cb("🔊", "play_unmute", gotdbot.ButtonStyleDefault{})
-	addToPlaylistBtn := cb("➕", "play_add_to_list", gotdbot.ButtonStylePrimary{})
-
-	switch mode {
-
-	case "play":
-		return &gotdbot.ReplyMarkupInlineKeyboard{
-			Rows: [][]gotdbot.InlineKeyboardButton{
-				{skipBtn, stopBtn, pauseBtn},
-				{addToPlaylistBtn, CloseBtn},
-			},
-		}
-
-	case "pause":
-		return &gotdbot.ReplyMarkupInlineKeyboard{
-			Rows: [][]gotdbot.InlineKeyboardButton{
-				{skipBtn, stopBtn, resumeBtn},
-				{CloseBtn},
-			},
-		}
-
-	case "resume":
-		return &gotdbot.ReplyMarkupInlineKeyboard{
-			Rows: [][]gotdbot.InlineKeyboardButton{
-				{skipBtn, stopBtn, pauseBtn},
-				{CloseBtn},
-			},
-		}
-
-	case "mute":
-		return &gotdbot.ReplyMarkupInlineKeyboard{
-			Rows: [][]gotdbot.InlineKeyboardButton{
-				{skipBtn, stopBtn, unmuteBtn},
-				{CloseBtn},
-			},
-		}
-
-	case "unmute":
-		return &gotdbot.ReplyMarkupInlineKeyboard{
-			Rows: [][]gotdbot.InlineKeyboardButton{
-				{skipBtn, stopBtn, muteBtn},
-				{CloseBtn},
-			},
-		}
-
-	default:
-		return &gotdbot.ReplyMarkupInlineKeyboard{
-			Rows: [][]gotdbot.InlineKeyboardButton{
-				{CloseBtn},
-			},
-		}
+	back := cb("⏪ 10s", "play_seek_back", gotdbot.ButtonStyleDefault{})
+	forward := cb("10s ⏩", "play_seek_forward", gotdbot.ButtonStyleDefault{})
+	skip := cb("⏭", "play_skip", gotdbot.ButtonStyleDefault{})
+	stop := cb("⏹", "play_stop", gotdbot.ButtonStyleDefault{})
+	pause := cb("⏸", "play_pause", gotdbot.ButtonStyleDefault{})
+	resume := cb("▶", "play_resume", gotdbot.ButtonStyleDefault{})
+	mute := cb("🔇", "play_mute", gotdbot.ButtonStyleDefault{})
+	unmute := cb("🔊", "play_unmute", gotdbot.ButtonStyleDefault{})
+	queue := cb("📋 Queue", "play_queue", gotdbot.ButtonStylePrimary{})
+	loop := cb("🔁 Loop", "play_loop", gotdbot.ButtonStyleDefault{})
+	playlist := cb("➕", "play_add_to_list", gotdbot.ButtonStylePrimary{})
+	main := [][]gotdbot.InlineKeyboardButton{{back, pause, forward}, {skip, stop, mute}, {queue, loop, playlist}, {CloseBtn}}
+	if mode == "pause" {
+		main[0][1] = resume
 	}
+	if mode == "mute" {
+		main[1][2] = unmute
+	}
+	return &gotdbot.ReplyMarkupInlineKeyboard{Rows: main}
+}
+
+func LoopMarkup() *gotdbot.ReplyMarkupInlineKeyboard {
+	return &gotdbot.ReplyMarkupInlineKeyboard{Rows: [][]gotdbot.InlineKeyboardButton{{cb("Off", "play_loop_0", gotdbot.ButtonStyleDefault{}), cb("1", "play_loop_1", gotdbot.ButtonStyleDefault{}), cb("2", "play_loop_2", gotdbot.ButtonStyleDefault{}), cb("5", "play_loop_5", gotdbot.ButtonStyleDefault{}), cb("10", "play_loop_10", gotdbot.ButtonStyleDefault{})}, {cb("↩ Player", "play_controls", gotdbot.ButtonStylePrimary{}), CloseBtn}}}
+}
+
+func QueueControlMarkup(queue []*utils.CachedTrack, page, pageSize int) *gotdbot.ReplyMarkupInlineKeyboard {
+	rows := make([][]gotdbot.InlineKeyboardButton, 0)
+	start := 1 + page*pageSize
+	end := start + pageSize
+	if end > len(queue) {
+		end = len(queue)
+	}
+	for i := start; i < end; i++ {
+		rows = append(rows, []gotdbot.InlineKeyboardButton{cb(fmt.Sprintf("▶ %d", i), "play_qnow_"+queue[i].TrackID, gotdbot.ButtonStylePrimary{}), cb(fmt.Sprintf("✖ %d", i), "play_qrm_"+queue[i].TrackID, gotdbot.ButtonStyleDanger{})})
+	}
+	pages := (len(queue) - 1 + pageSize - 1) / pageSize
+	if pages > 1 {
+		prev := page - 1
+		if prev < 0 {
+			prev = 0
+		}
+		next := page + 1
+		if next >= pages {
+			next = pages - 1
+		}
+		rows = append(rows, []gotdbot.InlineKeyboardButton{cb("‹", fmt.Sprintf("play_qpage_%d", prev), gotdbot.ButtonStyleDefault{}), cb(fmt.Sprintf("%d/%d", page+1, pages), fmt.Sprintf("play_qpage_%d", page), gotdbot.ButtonStyleDefault{}), cb("›", fmt.Sprintf("play_qpage_%d", next), gotdbot.ButtonStyleDefault{})})
+	}
+	rows = append(rows, []gotdbot.InlineKeyboardButton{cb("🔀", "play_qshuffle", gotdbot.ButtonStyleDefault{}), cb("🗑 Clear", "play_qclear", gotdbot.ButtonStyleDanger{}), cb("↩ Player", "play_controls", gotdbot.ButtonStylePrimary{})})
+	return &gotdbot.ReplyMarkupInlineKeyboard{Rows: rows}
 }
 
 func AddMeMarkup(username string) *gotdbot.ReplyMarkupInlineKeyboard {

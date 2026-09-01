@@ -10,6 +10,7 @@ package cache
 
 import (
 	"ashokshau/tgmusic/src/utils"
+	"math/rand"
 	"sync"
 )
 
@@ -315,3 +316,50 @@ func (c *ChatCacher) GetTrackIfExists(chatID int64, trackID string) *utils.Cache
 
 // ChatCache is the global instance.
 var ChatCache = newChatCacher()
+
+// ClearUpcoming removes queued tracks while preserving the currently playing track.
+func (c *ChatCacher) ClearUpcoming(chatID int64) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	data, ok := c.chatCache[chatID]
+	if !ok || len(data.Queue) <= 1 {
+		return 0
+	}
+	removed := len(data.Queue) - 1
+	for i := 1; i < len(data.Queue); i++ {
+		data.Queue[i] = nil
+	}
+	data.Queue = data.Queue[:1]
+	return removed
+}
+
+// RemoveQueuedTrackByID removes an upcoming track but never the currently playing one.
+func (c *ChatCacher) RemoveQueuedTrackByID(chatID int64, trackID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	data, ok := c.chatCache[chatID]
+	if !ok {
+		return false
+	}
+	for i := 1; i < len(data.Queue); i++ {
+		if data.Queue[i].TrackID == trackID {
+			copy(data.Queue[i:], data.Queue[i+1:])
+			data.Queue[len(data.Queue)-1] = nil
+			data.Queue = data.Queue[:len(data.Queue)-1]
+			return true
+		}
+	}
+	return false
+}
+
+// ShuffleUpcoming randomizes upcoming tracks and preserves the current track.
+func (c *ChatCacher) ShuffleUpcoming(chatID int64) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	data, ok := c.chatCache[chatID]
+	if !ok || len(data.Queue) <= 1 {
+		return 0
+	}
+	rand.Shuffle(len(data.Queue)-1, func(i, j int) { data.Queue[i+1], data.Queue[j+1] = data.Queue[j+1], data.Queue[i+1] })
+	return len(data.Queue) - 1
+}
