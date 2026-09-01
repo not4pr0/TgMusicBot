@@ -351,6 +351,8 @@ func handleSingleTrack(c *td.Client, m *td.Message, updater *td.Message, song ut
 		}
 
 		saveCache.FilePath = dlResult
+
+		hydrateDownloadedTrackDuration(&saveCache, utils.GetMediaDuration)
 	}
 
 	if err := vc.Calls.PlayMedia(c, chatId, saveCache.FilePath, saveCache.IsVideo, ""); err != nil {
@@ -365,7 +367,7 @@ func handleSingleTrack(c *td.Client, m *td.Message, updater *td.Message, song ut
 
 	nowPlaying := fmt.Sprintf(
 		"<u><b>| Started streaming</b></u>\n\n<b>Title:</b> <a href='%s'>%s</a>\n\n<b>Duration:</b> %s min\n<b>Requested by:</b> %s",
-		escURLnp, escNamenp, utils.SecToMin(song.Duration), escUsernp,
+		escURLnp, escNamenp, utils.SecToMin(saveCache.Duration), escUsernp,
 	)
 
 	_, err := updater.EditText(c, nowPlaying, &td.EditTextMessageOpts{
@@ -380,6 +382,16 @@ func handleSingleTrack(c *td.Client, m *td.Message, updater *td.Message, song ut
 	}
 
 	return nil
+}
+
+// hydrateDownloadedTrackDuration records the duration of a downloaded media file when
+// upstream metadata (such as a direct YouTube URL) did not provide one.
+func hydrateDownloadedTrackDuration(track *utils.CachedTrack, probe func(string) int) {
+	if track == nil || track.Duration > 0 || track.FilePath == "" || probe == nil {
+		return
+	}
+
+	track.Duration = probe(track.FilePath)
 }
 
 // handleMultipleTracks handles multiple tracks.
