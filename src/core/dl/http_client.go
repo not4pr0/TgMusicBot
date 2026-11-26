@@ -33,6 +33,8 @@ const (
 	defaultConnectTimeout = 15 * time.Second
 	maxRetries            = 2
 	initialBackoff        = 1 * time.Second
+	apiRequestTimeout     = 8 * time.Second
+	apiConnectTimeout     = 3 * time.Second
 )
 
 var client = &http.Client{
@@ -64,8 +66,27 @@ var client = &http.Client{
 	},
 }
 
+var apiClient = &http.Client{
+	Timeout: apiRequestTimeout,
+	Transport: &http.Transport{
+		TLSHandshakeTimeout:   apiConnectTimeout,
+		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+		DialContext:           (&net.Dialer{Timeout: apiConnectTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		ResponseHeaderTimeout: apiRequestTimeout,
+		IdleConnTimeout:       30 * time.Second,
+	},
+}
+
 // sendRequest performs an HTTP request with a given context, method, URL, body, and headers.
 func sendRequest(method, fullURL string, body io.Reader, headers map[string]string) (*http.Response, error) {
+	return sendRequestWithOptions(method, fullURL, body, headers, client, defaultRequestTimeout, maxRetries)
+}
+
+func sendAPIRequest(method, fullURL string, body io.Reader, headers map[string]string) (*http.Response, error) {
+	return sendRequestWithOptions(method, fullURL, body, headers, apiClient, apiRequestTimeout, 1)
+}
+
+func sendRequestWithOptions(method, fullURL string, body io.Reader, headers map[string]string, httpClient *http.Client, requestTimeout time.Duration, retries int) (*http.Response, error) {
 	baseReq, err := http.NewRequest(method, fullURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create base request: %w", err)
@@ -82,13 +103,13 @@ func sendRequest(method, fullURL string, body io.Reader, headers map[string]stri
 	var reqErr error
 	backoff := initialBackoff
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; attempt < retries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(backoff)
 			backoff *= 2
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), defaultRequestTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		req, err := http.NewRequestWithContext(ctx, method, fullURL, body)
 		if err != nil {
 			cancel()
@@ -97,7 +118,7 @@ func sendRequest(method, fullURL string, body io.Reader, headers map[string]stri
 		}
 		req.Header = baseReq.Header.Clone()
 
-		resp, reqErr = client.Do(req)
+		resp, reqErr = httpClient.Do(req)
 		if reqErr == nil {
 			if resp.StatusCode < 500 {
 				resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
@@ -111,7 +132,7 @@ func sendRequest(method, fullURL string, body io.Reader, headers map[string]stri
 		} else {
 			cancel()
 			if isTemporaryError(reqErr) {
-				slog.Info("Temporary error on", "attempt", attempt+1, "maxRetries", maxRetries, "error", reqErr)
+				slog.Info("Temporary error on", "attempt", attempt+1, "maxRetries", retries, "error", reqErr)
 				continue
 			}
 			break // Do not retry on permanent errors
@@ -119,7 +140,7 @@ func sendRequest(method, fullURL string, body io.Reader, headers map[string]stri
 	}
 
 	if reqErr == nil {
-		reqErr = fmt.Errorf("request failed after %d attempts", maxRetries)
+		reqErr = fmt.Errorf("request failed after %d attempts", retries)
 	}
 
 	errMsg := maskSensitiveInfo(reqErr.Error())

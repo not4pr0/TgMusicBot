@@ -100,6 +100,20 @@ func (y *youTubeData) getInfoWithYtDlp(rawURL string, playlist bool) (utils.Plat
 	return utils.PlatformTracks{}, fmt.Errorf("yt-dlp info failed with all configured cookie files: %s", strings.Join(attempts, " | "))
 }
 
+// searchWithYtDlp resolves a free-text query through yt-dlp's ytsearch
+// extractor, reusing the cookie rotation and proxy of the metadata path. Used
+// when InnerTube answers with an empty result list.
+func (y *youTubeData) searchWithYtDlp(query string, limit int) (utils.PlatformTracks, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return utils.PlatformTracks{}, errors.New("empty YouTube query")
+	}
+	if limit < 1 {
+		limit = 5
+	}
+	return y.getInfoWithYtDlp(fmt.Sprintf("ytsearch%d:%s", limit, query), true)
+}
+
 // getGenericInfoWithYtDlp fetches metadata for non-YouTube platforms
 // (SoundCloud, ...) directly with yt-dlp, without cookies or proxy.
 func getGenericInfoWithYtDlp(rawURL, platform string, playlist bool) (utils.PlatformTracks, error) {

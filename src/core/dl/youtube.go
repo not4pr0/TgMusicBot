@@ -95,40 +95,8 @@ func (y *youTubeData) getInfo() (utils.PlatformTracks, error) {
 		return y.getInfoWithYtDlp(y.Query, true)
 
 	case videoID != "":
-		for _, query := range []string{videoID, y.Query} {
-			tracks, err := searchYouTube(query, 10)
-			if err != nil {
-				continue
-			}
-
-			for _, track := range tracks {
-				if track.Id == videoID {
-					return utils.PlatformTracks{Results: []utils.MusicTrack{track}}, nil
-				}
-			}
-		}
-
-		if title, err := getYouTubeTitleFromOEmbed(videoID); err == nil && title != "" {
-			tracks, err := searchYouTube(title, 10)
-			if err == nil {
-				for _, track := range tracks {
-					if track.Id == videoID {
-						return utils.PlatformTracks{Results: []utils.MusicTrack{track}}, nil
-					}
-				}
-			}
-		}
-
-		slog.Warn("Video ID was extracted but no matching track was found in search results", "video_id", videoID)
-		tracks, err := getYouTubeVideo(ctx, videoID)
-		if err == nil && len(tracks.Results) > 0 {
-			return tracks, nil
-		}
-		if err != nil {
-			slog.Warn("YouTube video InnerTube failed, using minimal metadata to avoid a yt-dlp probe", "video", videoID, "error", err)
-		} else {
-			slog.Warn("YouTube video InnerTube returned no tracks, using minimal metadata to avoid a yt-dlp probe", "video", videoID)
-		}
+		// A direct URL already contains the only value yt-dlp needs. Avoid
+		// search, oEmbed and Fallen API probes on the hot path.
 		return utils.PlatformTracks{Results: []utils.MusicTrack{{
 			Id:       videoID,
 			Title:    "YouTube video " + videoID,
@@ -142,15 +110,31 @@ func (y *youTubeData) getInfo() (utils.PlatformTracks, error) {
 
 func (y *youTubeData) search() (utils.PlatformTracks, error) {
 	tracks, err := searchYouTube(y.Query, 5)
+
+	if err == nil && len(tracks) > 0 {
+		return utils.PlatformTracks{Results: tracks}, nil
+	}
+	if err != nil {
+		slog.Warn("InnerTube search failed, falling back to yt-dlp", "query", y.Query, "error", err)
+	} else {
+		slog.Warn("InnerTube search returned no results, falling back to yt-dlp", "query", y.Query)
+	}
+
+	// YouTube answers 200 with an empty result list for queries it filters
+	// (age-restricted catalogues, datacenter IPs). yt-dlp with a logged-in
+	// cookie export still resolves them, so try that before giving up.
+	fallback, fallbackErr := y.searchWithYtDlp(y.Query, 5)
+	if fallbackErr == nil && len(fallback.Results) > 0 {
+		return fallback, nil
+	}
+	if fallbackErr != nil {
+		slog.Warn("yt-dlp search fallback failed", "query", y.Query, "error", fallbackErr)
+	}
+
 	if err != nil {
 		return utils.PlatformTracks{}, err
 	}
-
-	if len(tracks) == 0 {
-		return utils.PlatformTracks{}, errors.New("no video results were found")
-	}
-
-	return utils.PlatformTracks{Results: tracks}, nil
+	return utils.PlatformTracks{}, errors.New("no video results were found")
 }
 
 func (y *youTubeData) getTrack() (utils.TrackInfo, error) {
@@ -160,12 +144,6 @@ func (y *youTubeData) getTrack() (utils.TrackInfo, error) {
 
 	if !y.isValid() {
 		return utils.TrackInfo{}, errors.New("the provided URL is invalid or the platform is not supported")
-	}
-
-	if y.ApiUrl != "" && y.APIKey != "" {
-		if trackInfo, err := newApiData(y.Query).getTrack(); err == nil {
-			return trackInfo, nil
-		}
 	}
 
 	getInfo, err := y.getInfo()
@@ -190,12 +168,6 @@ func (y *youTubeData) getTrack() (utils.TrackInfo, error) {
 func (y *youTubeData) downloadTrack(info utils.TrackInfo, video bool) (string, error) {
 	if !video && info.CdnURL != "" {
 		return info.CdnURL, nil
-	}
-
-	if !video && y.ApiUrl != "" && y.APIKey != "" {
-		if filePath, err := y.downloadWithApi(info.Id, video); err == nil {
-			return filePath, nil
-		}
 	}
 
 	return y.downloadWithYtDlp(info.Id, video)

@@ -93,6 +93,8 @@ func main() {
 		}
 	}
 
+	dl.CleanupDownloads()
+
 	err = src.Init(client)
 	if err != nil {
 		panic(err)

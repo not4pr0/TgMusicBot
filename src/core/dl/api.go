@@ -63,7 +63,17 @@ func newApiData(query string) *apiData {
 }
 
 func (a *apiData) isValid() bool {
-	if a.Query == "" || a.ApiUrl == "" || a.APIKey == "" {
+	if a.Query == "" {
+		return false
+	}
+
+	// SoundCloud is handled locally by yt-dlp. It must remain available even
+	// when the optional Fallen API is down or not configured.
+	if a.isSoundCloud() {
+		return true
+	}
+
+	if a.ApiUrl == "" || a.APIKey == "" {
 		return false
 	}
 
@@ -80,13 +90,18 @@ func (a *apiData) getInfo() (utils.PlatformTracks, error) {
 	if !a.isValid() {
 		return utils.PlatformTracks{}, errors.New("the provided URL is invalid or the platform is not supported")
 	}
+	if a.isSoundCloud() {
+		return getGenericInfoWithYtDlp(a.Query, utils.SoundCloud, false)
+	}
 
 	fullURL := fmt.Sprintf("%s/api/get_url?%s", a.ApiUrl, url.Values{"url": {a.Query}}.Encode())
-	resp, err := sendRequest(http.MethodGet, fullURL, nil, map[string]string{"X-API-Key": a.APIKey})
+	resp, err := sendAPIRequest(http.MethodGet, fullURL, nil, map[string]string{"X-API-Key": a.APIKey})
 	if err != nil {
-		if a.isSoundCloud() {
-			slog.Warn("SoundCloud API getInfo failed, falling back to yt-dlp", "error", err)
-			return getGenericInfoWithYtDlp(a.Query, utils.SoundCloud, false)
+		if a.isSpotify() {
+			if tracks, fallbackErr := getSpotifyFallback(a.Query); fallbackErr == nil {
+				return tracks, nil
+			}
+			return utils.PlatformTracks{}, errors.New("Spotify fallback failed; API unavailable")
 		}
 		return utils.PlatformTracks{}, fmt.Errorf("the GetInfo request failed: %w", err)
 	}
@@ -96,9 +111,11 @@ func (a *apiData) getInfo() (utils.PlatformTracks, error) {
 	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		if a.isSoundCloud() {
-			slog.Warn("SoundCloud API getInfo returned non-OK status, falling back to yt-dlp", "status", resp.Status)
-			return getGenericInfoWithYtDlp(a.Query, utils.SoundCloud, false)
+		if a.isSpotify() {
+			if tracks, fallbackErr := getSpotifyFallback(a.Query); fallbackErr == nil {
+				return tracks, nil
+			}
+			return utils.PlatformTracks{}, errors.New("Spotify fallback failed; API unavailable")
 		}
 		return utils.PlatformTracks{}, fmt.Errorf("unexpected status code while fetching info: %s", resp.Status)
 	}
@@ -121,7 +138,7 @@ func (a *apiData) search() (utils.PlatformTracks, error) {
 		"limit": {"5"},
 	}.Encode())
 
-	resp, err := sendRequest(http.MethodGet, fullURL, nil, map[string]string{"X-API-Key": a.APIKey})
+	resp, err := sendAPIRequest(http.MethodGet, fullURL, nil, map[string]string{"X-API-Key": a.APIKey})
 	if err != nil {
 		return utils.PlatformTracks{}, fmt.Errorf("the search request failed: %w", err)
 	}
@@ -144,13 +161,13 @@ func (a *apiData) search() (utils.PlatformTracks, error) {
 
 // getTrack retrieves detailed information for a single track from the API.
 func (a *apiData) getTrack() (utils.TrackInfo, error) {
+	if a.isSoundCloud() {
+		return a.soundCloudYtDlpTrackInfo(), nil
+	}
+
 	fullURL := fmt.Sprintf("%s/api/track?%s", a.ApiUrl, url.Values{"url": {a.Query}}.Encode())
-	resp, err := sendRequest(http.MethodGet, fullURL, nil, map[string]string{"X-API-Key": a.APIKey})
+	resp, err := sendAPIRequest(http.MethodGet, fullURL, nil, map[string]string{"X-API-Key": a.APIKey})
 	if err != nil {
-		if a.isSoundCloud() {
-			slog.Warn("SoundCloud API getTrack failed, falling back to yt-dlp download", "error", err)
-			return a.soundCloudYtDlpTrackInfo(), nil
-		}
 		slog.Warn("GetTrack request failed", "error", err)
 		return utils.TrackInfo{}, fmt.Errorf("the GetTrack request failed: %w", err)
 	}
@@ -160,10 +177,6 @@ func (a *apiData) getTrack() (utils.TrackInfo, error) {
 	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		if a.isSoundCloud() {
-			slog.Warn("SoundCloud API getTrack returned non-OK status, falling back to yt-dlp download", "status", resp.Status)
-			return a.soundCloudYtDlpTrackInfo(), nil
-		}
 		return utils.TrackInfo{}, fmt.Errorf("unexpected status code while fetching the track: %s", resp.Status)
 	}
 
@@ -205,6 +218,10 @@ func (a *apiData) downloadTrack(info utils.TrackInfo, video bool) (string, error
 	}
 
 	return filePath, nil
+}
+
+func (a *apiData) isSpotify() bool {
+	return apiPatterns[utils.Spotify].MatchString(a.Query)
 }
 
 func (a *apiData) isSoundCloud() bool {

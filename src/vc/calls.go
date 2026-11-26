@@ -270,7 +270,7 @@ func (c *TelegramCalls) RegisterHandlers(client *td.Client) {
 
 	for _, call := range c.assistants {
 		call.OnStreamEnd(func(chatID int64, streamType ntgcalls.StreamType, device ntgcalls.StreamDevice) {
-			if streamType == ntgcalls.VideoStream {
+			if streamType == ntgcalls.VideoStream || !call.hasActiveGroupCall(chatID) {
 				return
 			}
 

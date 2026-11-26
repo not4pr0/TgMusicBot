@@ -15,3 +15,5 @@ libtdjson.so
 
 .claude/
 .env.bak.*
+.env.backup*
+.backup-*/

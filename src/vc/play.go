@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	td "github.com/AshokShau/gotdbot"
 )
@@ -29,7 +30,8 @@ func classifyError(err error) errorKind {
 		return errFatal
 	case strings.Contains(msg, "GROUPCALL_INVALID"):
 		return errFatal
-	case strings.Contains(msg, "GROUPCALL_ADD_PARTICIPANTS_FAILED"):
+	case strings.Contains(msg, "GROUPCALL_ADD_PARTICIPANTS_FAILED"),
+		strings.Contains(msg, "INTERDC_X_CALL_ERROR"):
 		return errRetryOnce
 	case strings.Contains(msg, "CHANNELS_TOO_MUCH"),
 		strings.Contains(msg, "FROZEN_METHOD_INVALID"),
@@ -37,6 +39,13 @@ func classifyError(err error) errorKind {
 		return errRotate
 	default:
 		return errUnknown
+	}
+}
+
+func waitBeforeTransientRetry(err error) {
+	if strings.Contains(err.Error(), "INTERDC_X_CALL_ERROR") {
+		logger.Warn("Retrying transient Telegram group call error", "error", err)
+		time.Sleep(time.Second)
 	}
 }
 
@@ -74,6 +83,7 @@ func (c *TelegramCalls) PlayMedia(bot *td.Client, chatID int64, filePath string,
 		return fmt.Errorf("playback failed: %w", err)
 
 	case errRetryOnce:
+		waitBeforeTransientRetry(err)
 		err = c.playMedia(bot, chatID, filePath, video, ffmpegParameters, call, index)
 		if err == nil {
 			_ = db.Instance.SetAssistant(chatID, index)
@@ -113,7 +123,9 @@ func (c *TelegramCalls) playMedia(bot *td.Client, chatID int64, filePath string,
 
 	mediaDesc := getMediaDescription(filePath, video, chatID, ffmpegParameters)
 	if err := call.Play(context.Background(), chatID, mediaDesc); err != nil {
-		cache.ChatCache.ClearChat(chatID)
+		if !strings.Contains(err.Error(), "INTERDC_X_CALL_ERROR") {
+			cache.ChatCache.ClearChat(chatID)
+		}
 		return err
 	}
 
@@ -143,6 +155,7 @@ func (c *TelegramCalls) rotateAndPlay(bot *td.Client, chatID int64, filePath str
 
 		switch classifyError(err) {
 		case errRetryOnce:
+			waitBeforeTransientRetry(err)
 			err = c.playMedia(bot, chatID, filePath, video, ffmpegParameters, call, nextIndex)
 			if err == nil {
 				_ = db.Instance.SetAssistant(chatID, nextIndex)

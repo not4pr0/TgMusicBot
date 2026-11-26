@@ -58,6 +58,12 @@ func (a *Assistant) OnStreamEnd(callback ntgcalls.StreamEndCallback) {
 	a.streamEndCallbacks = append(a.streamEndCallbacks, callback)
 }
 
+func (a *Assistant) hasActiveGroupCall(chatId int64) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.inputGroupCalls[chatId] != nil
+}
+
 func (a *Assistant) Close() {
 	a.binding.Free()
 }
@@ -143,6 +149,7 @@ func (a *Assistant) connectCall(ctx context.Context, chatId int64, mediaDescript
 			},
 		)
 		if err != nil {
+			_ = a.binding.Stop(chatId)
 			return err
 		}
 

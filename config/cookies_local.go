@@ -9,6 +9,7 @@
 package config
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -114,12 +115,30 @@ func addCookieFile(candidates *[]cookieFileCandidate, seen map[string]bool, path
 		return
 	}
 
+	rank := cookieFileRank(cleanPath)
+	if !cookieFileHasLogin(cleanPath) {
+		// Anonymous exports (no LOGIN_INFO cookie) make YouTube return empty
+		// search results and "Sign in to confirm you're not a bot" walls, so
+		// they are only tried once every logged-in export has failed.
+		rank += 10
+	}
+
 	seen[cleanPath] = true
 	*candidates = append(*candidates, cookieFileCandidate{
 		path:    cleanPath,
 		modUnix: st.ModTime().Unix(),
-		rank:    cookieFileRank(cleanPath),
+		rank:    rank,
 	})
+}
+
+// cookieFileHasLogin reports whether a Netscape cookie export carries a
+// LOGIN_INFO cookie, which only a genuinely logged-in YouTube session has.
+func cookieFileHasLogin(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return bytes.Contains(data, []byte("LOGIN_INFO"))
 }
 
 func cookieFileRank(path string) int {
